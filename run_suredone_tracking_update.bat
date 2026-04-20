@@ -18,7 +18,7 @@ echo  SureDone Tracking Updater
 echo  ════════════════════════════════════════════
 echo.
 
-py -m pip install pyodbc requests --quiet
+py -m pip install -r "%SCRIPT_DIR%scripts\requirements.txt" --quiet
 
 py "%SCRIPT_DIR%scripts\suredone_tracking_update.py" %*
 
