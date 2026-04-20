@@ -18,7 +18,16 @@ echo  SureDone Tracking Updater
 echo  ════════════════════════════════════════════
 echo.
 
-py -m pip install -r "%SCRIPT_DIR%scripts\requirements.txt" --quiet
+echo  Installing required packages...
+py -m pip install -r "%SCRIPT_DIR%scripts\requirements.txt"
+
+if errorlevel 1 (
+    echo.
+    echo  *** Package install failed. See above. ***
+    echo.
+    pause
+    exit /b 1
+)
 
 py "%SCRIPT_DIR%scripts\suredone_tracking_update.py" %*
 
