@@ -9,16 +9,14 @@ New approach: query SureDone for orders with MISSING tracking
 
 Channels supported (all follow {prefix}{GP_PO#} pattern):
   shopifyYUK*, shopifyZUM*, shopifyRWW*, shopifyUSA*, shopifyB2B*, shopifyDYN*
-  amazon*   (GP customer 305943)
-  walmart*  (GP customer 310319)
+  walmart*  (GP customer 310319, matched by PO#)
 
 Channels NOT supported:
   shopify*  (plain consumer orders - no GP record)
 
-eBay matching:
-  ebay*     - GP stores the eBay order number in VehicleInfo.MODEL (joined on MASTER#)
-              for BILL_TO_CUST# = 237093. We match SureDone ebay{order_num} to
-              GP by querying MODEL = order_num, same as suredone_export.py.
+MODEL-based matching (order number stored in VehicleInfo.MODEL, not PO#):
+  ebay*     - BILL_TO_CUST# = 237093. SureDone ebay{order_num} matched via MODEL.
+  amazon*   - BILL_TO_CUST# = 310319. SureDone amazon{order_num} matched via MODEL.
 
 Usage:
     py suredone_tracking_update.py              # last 10 days
@@ -163,6 +161,7 @@ def fetch_orders_needing_tracking(since_date=None):
                 "channel":   channel_of(order_ref),
                 "date":      order_date_s,
                 "is_ebay":   order_ref.startswith("ebay"),
+                "is_amazon": order_ref.startswith("amazon"),
             })
 
         print(f"  Page {page}: {total_scanned} scanned, "
@@ -182,31 +181,30 @@ def fetch_orders_needing_tracking(since_date=None):
 GP_SQL = """
 SELECT
     D.[PO#],
-    MIN(D.[MASTER#])      AS [MASTER#],
-    MIN(D.[INVOICEDDATE]) AS [INVOICEDDATE],
-    MIN(D.[TRACKING#])    AS [TRACKING#],
-    MIN(D.[ITEM#])        AS [ITEM#],
-    MIN(D.[QUANTITY])     AS [QUANTITY],
-    MIN(D.[INVOICE#])     AS [INVOICE#],
-    MIN(D.[CARRIER])      AS [CARRIER]
+    D.[MASTER#],
+    D.[INVOICEDDATE],
+    D.[TRACKING#],
+    D.[ITEM#],
+    D.[QUANTITY],
+    D.[INVOICE#],
+    D.[CARRIER]
 FROM [RRPRead].[dbo].[CustomerShippingDetail] D
 WHERE D.[PO#] IN ({placeholders})
   AND D.[TRACKING#] IS NOT NULL
   AND LTRIM(RTRIM(D.[TRACKING#])) <> ''
-GROUP BY D.[PO#]
 """
 
-# eBay: order number lives in VehicleInfo.MODEL, not PO#
+# eBay: order number lives in VehicleInfo.MODEL, BILL_TO_CUST# = 237093
 GP_EBAY_SQL = """
 SELECT
     V.[MODEL]             AS [PO#],
-    MIN(D.[MASTER#])      AS [MASTER#],
-    MIN(D.[INVOICEDDATE]) AS [INVOICEDDATE],
-    MIN(D.[TRACKING#])    AS [TRACKING#],
-    MIN(D.[ITEM#])        AS [ITEM#],
-    MIN(D.[QUANTITY])     AS [QUANTITY],
-    MIN(D.[INVOICE#])     AS [INVOICE#],
-    MIN(D.[CARRIER])      AS [CARRIER]
+    D.[MASTER#],
+    D.[INVOICEDDATE],
+    D.[TRACKING#],
+    D.[ITEM#],
+    D.[QUANTITY],
+    D.[INVOICE#],
+    D.[CARRIER]
 FROM [RRPRead].[dbo].[CustomerShippingDetail] D
 LEFT JOIN [RRPRead].[dbo].[VehicleInfo] V
     ON RTRIM(V.[mstrnumb]) = RTRIM(D.[MASTER#])
@@ -214,7 +212,26 @@ WHERE D.[BILL_TO_CUST#] = '237093'
   AND V.[MODEL] IN ({placeholders})
   AND D.[TRACKING#] IS NOT NULL
   AND LTRIM(RTRIM(D.[TRACKING#])) <> ''
-GROUP BY V.[MODEL]
+"""
+
+# Amazon: order number lives in VehicleInfo.MODEL, BILL_TO_CUST# = 310319
+GP_AMAZON_SQL = """
+SELECT
+    V.[MODEL]             AS [PO#],
+    D.[MASTER#],
+    D.[INVOICEDDATE],
+    D.[TRACKING#],
+    D.[ITEM#],
+    D.[QUANTITY],
+    D.[INVOICE#],
+    D.[CARRIER]
+FROM [RRPRead].[dbo].[CustomerShippingDetail] D
+LEFT JOIN [RRPRead].[dbo].[VehicleInfo] V
+    ON RTRIM(V.[mstrnumb]) = RTRIM(D.[MASTER#])
+WHERE D.[BILL_TO_CUST#] = '310319'
+  AND V.[MODEL] IN ({placeholders})
+  AND D.[TRACKING#] IS NOT NULL
+  AND LTRIM(RTRIM(D.[TRACKING#])) <> ''
 """
 
 def get_db_conn():
@@ -234,36 +251,39 @@ def get_db_conn():
 
 def fetch_tracking_from_gp(needs):
     """
-    Returns dict: order_key -> {OrderNum, MasterNum, ShipDate, ShipTracking, ...}
+    Returns dict: po -> list of row dicts (one per item/shipment line).
 
-    For eBay orders (is_ebay=True), matches via VehicleInfo.MODEL using GP_EBAY_SQL.
-    For all others, matches via CustomerShippingDetail.PO# using GP_SQL.
-    The returned dict is keyed by the same 'po' value stored in each needs entry,
-    so build_csv can look up by o["po"] regardless of channel.
+    Routing:
+      eBay    (is_ebay=True)   -> GP_EBAY_SQL   (MODEL lookup, BILL_TO_CUST# 237093)
+      Amazon  (is_amazon=True) -> GP_AMAZON_SQL  (MODEL lookup, BILL_TO_CUST# 310319)
+      All others               -> GP_SQL          (PO# lookup, no customer filter)
     """
-    regular_pos = list({o["po"] for o in needs if not o.get("is_ebay")})
-    ebay_models  = list({o["po"] for o in needs if     o.get("is_ebay")})
+    regular_pos   = list({o["po"] for o in needs if not o.get("is_ebay") and not o.get("is_amazon")})
+    ebay_models   = list({o["po"] for o in needs if     o.get("is_ebay")})
+    amazon_models = list({o["po"] for o in needs if     o.get("is_amazon")})
 
     conn = get_db_conn()
     results = {}
 
     def _parse_rows(cur):
+        # Returns dict: po -> list of row dicts (one per item/shipment line)
         out = {}
         for row in cur.fetchall():
             po, master, ship_date, tracking, item, qty, invoice, carrier = row
             key = str(po).strip() if po else ""
             if not key:
                 continue
-            out[key] = {
-                "OrderNum":    key,
-                "MasterNum":   str(master).strip()   if master   else "",
-                "ShipDate":    ship_date.strftime(CSV_CONFIG["shipdate_format"]) if ship_date else "",
+            row_dict = {
+                "OrderNum":     key,
+                "MasterNum":    str(master).strip()   if master   else "",
+                "ShipDate":     ship_date.strftime(CSV_CONFIG["shipdate_format"]) if ship_date else "",
                 "ShipTracking": str(tracking).strip() if tracking else "",
-                "Item":        str(item).strip()     if item     else "",
-                "QtyShipped":  str(qty).strip()      if qty      else "",
-                "InvoiceNum":  str(invoice).strip()  if invoice  else "",
-                "ShipCarrier": str(carrier).strip()  if carrier  else "",
+                "Item":         str(item).strip()     if item     else "",
+                "QtyShipped":   str(qty).strip()      if qty      else "",
+                "InvoiceNum":   str(invoice).strip()  if invoice  else "",
+                "ShipCarrier":  str(carrier).strip()  if carrier  else "",
             }
+            out.setdefault(key, []).append(row_dict)
         return out
 
     # Regular channels (Shopify branded, Amazon, Walmart)
@@ -274,7 +294,7 @@ def fetch_tracking_from_gp(needs):
         cur.execute(q, batch)
         results.update(_parse_rows(cur))
 
-    # eBay: match by MODEL
+    # eBay: match by MODEL (BILL_TO_CUST# 237093)
     if ebay_models:
         for i in range(0, len(ebay_models), 1000):
             batch = ebay_models[i: i + 1000]
@@ -284,6 +304,17 @@ def fetch_tracking_from_gp(needs):
             ebay_results = _parse_rows(cur)
             results.update(ebay_results)
             print(f"  eBay MODEL matches: {len(ebay_results)} of {len(batch)}")
+
+    # Amazon: match by MODEL (BILL_TO_CUST# 310319)
+    if amazon_models:
+        for i in range(0, len(amazon_models), 1000):
+            batch = amazon_models[i: i + 1000]
+            q = GP_AMAZON_SQL.format(placeholders=",".join("?" for _ in batch))
+            cur = conn.cursor()
+            cur.execute(q, batch)
+            amazon_results = _parse_rows(cur)
+            results.update(amazon_results)
+            print(f"  Amazon MODEL matches: {len(amazon_results)} of {len(batch)}")
 
     conn.close()
     return results
@@ -295,12 +326,17 @@ def fetch_tracking_from_gp(needs):
 
 def build_csv(needs, gp_data):
     rows, no_gp = [], []
+    seen_pos = set()
     for o in needs:
-        gp = gp_data.get(o["po"])
-        if not gp or not gp["ShipTracking"]:
-            no_gp.append(o["po"])
+        po = o["po"]
+        if po in seen_pos:
+            continue  # already added all rows for this PO#
+        gp_rows = gp_data.get(po)
+        if not gp_rows:
+            no_gp.append(po)
             continue
-        rows.append(gp)   # gp dict already has all CSV columns keyed correctly
+        rows.extend(gp_rows)  # one row per item/shipment line
+        seen_pos.add(po)
     df = pd.DataFrame(rows, columns=[
         "OrderNum","MasterNum","ShipDate","ShipTracking",
         "Item","QtyShipped","InvoiceNum","ShipCarrier"
@@ -393,9 +429,11 @@ def run(days=30, all_orders=False, dry_run=False):
 
     # ── 2. GP ─────────────────────────────────────────────────────────────────
     po_list = list({o["po"] for o in needs})
-    ebay_count = sum(1 for o in needs if o.get("is_ebay"))
+    ebay_count   = sum(1 for o in needs if o.get("is_ebay"))
+    amazon_count = sum(1 for o in needs if o.get("is_amazon"))
+    regular_count = len(po_list) - ebay_count - amazon_count
     print(f"\n[2/4] Querying GP for {len(po_list)} PO#s "
-          f"({ebay_count} eBay via MODEL, {len(po_list)-ebay_count} via PO#)...")
+          f"({ebay_count} eBay via MODEL, {amazon_count} Amazon via MODEL, {regular_count} via PO#)...")
     try:
         gp_data = fetch_tracking_from_gp(needs)
     except Exception as e:

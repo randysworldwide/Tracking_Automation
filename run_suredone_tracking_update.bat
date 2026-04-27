@@ -15,11 +15,11 @@ set SCRIPT_DIR=%~dp0
 
 echo.
 echo  SureDone Tracking Updater
-echo  ════════════════════════════════════════════
+echo  ==========================================
 echo.
 
 echo  Installing required packages...
-py -m pip install -r "%SCRIPT_DIR%scripts\requirements.txt"
+py -m pip install -q -r "%SCRIPT_DIR%scripts\requirements.txt"
 
 if errorlevel 1 (
     echo.
