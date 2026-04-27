@@ -25,19 +25,26 @@ Usage:
     py suredone_tracking_update.py --dry-run    # preview CSV, don't upload
 """
 
-import os, sys, re, time, argparse, datetime, traceback
+import os, sys, re, time, argparse, datetime, traceback, importlib.util
 from pathlib import Path
-
-SCRIPT_DIR = str(Path(__file__).resolve().parent)
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
 
 import pyodbc, requests, paramiko, pandas as pd
 
+# Load config.py by absolute path — avoids any sys.path issues
+_config_path = Path(__file__).resolve().parent / "config.py"
+if not _config_path.exists():
+    print(f"ERROR: config.py not found at {_config_path}")
+    sys.exit(1)
 try:
-    from config import DB_CONFIG, FTP_CONFIG, CSV_CONFIG, SUREDONE_CONFIG
-except ImportError as e:
-    print(f"ERROR: config.py missing keys: {e}")
+    _spec = importlib.util.spec_from_file_location("config", _config_path)
+    _cfg  = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_cfg)
+    DB_CONFIG      = _cfg.DB_CONFIG
+    FTP_CONFIG     = _cfg.FTP_CONFIG
+    CSV_CONFIG     = _cfg.CSV_CONFIG
+    SUREDONE_CONFIG = _cfg.SUREDONE_CONFIG
+except Exception as e:
+    print(f"ERROR: could not load config.py ({_config_path}): {e}")
     sys.exit(1)
 
 SD_BASE   = "https://api.suredone.com/v1"
