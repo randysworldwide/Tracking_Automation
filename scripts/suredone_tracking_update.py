@@ -26,10 +26,13 @@ Usage:
 """
 
 import os, sys, re, time, argparse, datetime, traceback
-import pyodbc, requests, paramiko, pandas as pd
+from pathlib import Path
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, SCRIPT_DIR)
+SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+import pyodbc, requests, paramiko, pandas as pd
 
 try:
     from config import DB_CONFIG, FTP_CONFIG, CSV_CONFIG, SUREDONE_CONFIG
