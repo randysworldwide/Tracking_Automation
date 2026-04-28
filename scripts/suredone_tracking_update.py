@@ -47,6 +47,8 @@ except Exception as e:
     print(f"ERROR: could not load config.py ({_config_path}): {e}")
     sys.exit(1)
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+
 SD_BASE   = "https://api.suredone.com/v1"
 PAGE_SIZE = 50
 
