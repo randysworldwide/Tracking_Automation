@@ -192,7 +192,7 @@ def fetch_orders_needing_tracking(since_date=None):
 
 GP_SQL = """
 SELECT
-    D.[PO#],
+    LTRIM(RTRIM(D.[PO#]))   AS [PO#],
     D.[MASTER#],
     D.[INVOICEDDATE],
     D.[TRACKING#],
@@ -201,7 +201,7 @@ SELECT
     D.[INVOICE#],
     D.[CARRIER]
 FROM [RRPRead].[dbo].[CustomerShippingDetail] D
-WHERE D.[PO#] IN ({placeholders})
+WHERE LTRIM(RTRIM(D.[PO#])) IN ({placeholders})
   AND D.[TRACKING#] IS NOT NULL
   AND LTRIM(RTRIM(D.[TRACKING#])) <> ''
 """
@@ -209,7 +209,7 @@ WHERE D.[PO#] IN ({placeholders})
 # eBay: order number lives in VehicleInfo.MODEL, BILL_TO_CUST# = 237093
 GP_EBAY_SQL = """
 SELECT
-    V.[MODEL]             AS [PO#],
+    LTRIM(RTRIM(V.[MODEL])) AS [PO#],
     D.[MASTER#],
     D.[INVOICEDDATE],
     D.[TRACKING#],
@@ -221,7 +221,7 @@ FROM [RRPRead].[dbo].[CustomerShippingDetail] D
 LEFT JOIN [RRPRead].[dbo].[VehicleInfo] V
     ON RTRIM(V.[mstrnumb]) = RTRIM(D.[MASTER#])
 WHERE D.[BILL_TO_CUST#] = '237093'
-  AND V.[MODEL] IN ({placeholders})
+  AND LTRIM(RTRIM(V.[MODEL])) IN ({placeholders})
   AND D.[TRACKING#] IS NOT NULL
   AND LTRIM(RTRIM(D.[TRACKING#])) <> ''
 """
@@ -229,7 +229,7 @@ WHERE D.[BILL_TO_CUST#] = '237093'
 # Amazon: order number lives in VehicleInfo.MODEL, BILL_TO_CUST# = 310319
 GP_AMAZON_SQL = """
 SELECT
-    V.[MODEL]             AS [PO#],
+    LTRIM(RTRIM(V.[MODEL])) AS [PO#],
     D.[MASTER#],
     D.[INVOICEDDATE],
     D.[TRACKING#],
@@ -241,7 +241,7 @@ FROM [RRPRead].[dbo].[CustomerShippingDetail] D
 LEFT JOIN [RRPRead].[dbo].[VehicleInfo] V
     ON RTRIM(V.[mstrnumb]) = RTRIM(D.[MASTER#])
 WHERE D.[BILL_TO_CUST#] = '310319'
-  AND V.[MODEL] IN ({placeholders})
+  AND LTRIM(RTRIM(V.[MODEL])) IN ({placeholders})
   AND D.[TRACKING#] IS NOT NULL
   AND LTRIM(RTRIM(D.[TRACKING#])) <> ''
 """
@@ -317,7 +317,7 @@ def fetch_tracking_from_gp(needs):
             results.update(ebay_results)
             print(f"  eBay MODEL matches: {len(ebay_results)} of {len(batch)}")
 
-    # Amazon: match by MODEL (BILL_TO_CUST# 310319)
+    # Amazon: match by MODEL (BILL_TO_CUST# 310319) — merge into existing results
     if amazon_models:
         for i in range(0, len(amazon_models), 1000):
             batch = amazon_models[i: i + 1000]
@@ -325,7 +325,11 @@ def fetch_tracking_from_gp(needs):
             cur = conn.cursor()
             cur.execute(q, batch)
             amazon_results = _parse_rows(cur)
-            results.update(amazon_results)
+            for po, rows in amazon_results.items():
+                if po in results:
+                    results[po].extend(rows)   # add MODEL rows alongside existing PO# rows
+                else:
+                    results[po] = rows
             print(f"  Amazon MODEL matches: {len(amazon_results)} of {len(batch)}")
 
     conn.close()
