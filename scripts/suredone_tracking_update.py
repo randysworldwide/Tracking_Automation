@@ -266,13 +266,13 @@ def fetch_tracking_from_gp(needs):
     Returns dict: po -> list of row dicts (one per item/shipment line).
 
     Routing:
-      eBay    (is_ebay=True)   -> GP_EBAY_SQL   (MODEL lookup, BILL_TO_CUST# 237093)
-      Amazon  (is_amazon=True) -> GP_AMAZON_SQL  (MODEL lookup, BILL_TO_CUST# 310319)
-      All others               -> GP_SQL          (PO# lookup, no customer filter)
+      eBay    (is_ebay=True)   -> GP_EBAY_SQL only  (MODEL lookup, BILL_TO_CUST# 237093)
+      Amazon  (is_amazon=True) -> GP_SQL (PO# lookup) AND GP_AMAZON_SQL (MODEL, BILL_TO_CUST# 310319)
+      All others               -> GP_SQL only         (PO# lookup, no customer filter)
     """
-    regular_pos   = list({o["po"] for o in needs if not o.get("is_ebay") and not o.get("is_amazon")})
+    regular_pos   = list({o["po"] for o in needs if not o.get("is_ebay")})   # includes Amazon (PO# lookup)
     ebay_models   = list({o["po"] for o in needs if     o.get("is_ebay")})
-    amazon_models = list({o["po"] for o in needs if     o.get("is_amazon")})
+    amazon_models = list({o["po"] for o in needs if     o.get("is_amazon")}) # also try MODEL lookup for cust 310319
 
     conn = get_db_conn()
     results = {}
